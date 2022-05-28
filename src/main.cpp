@@ -48,7 +48,10 @@ SoftwareSerial ss(GPSRX, GPSTX);
 float latitude, longitude;
 // float latitude = 37.58510543, longitude = 126.92524348;
 
-int buzzer_pin = 32;
+int buzzer_pin = 4;
+int buzzer_pwmChannel = 0;
+int buzzer_pwnFreq = 5000;
+int buzzer_pwmResoultion = 8;
 
 // Setting photoresistor lightness detection
 int photoresistor_pin = 34;
@@ -332,14 +335,14 @@ void workerSituation(void *parameter)
     {
       // this informs admin worker is in danger
       worker_danger = true;
-      digitalWrite(buzzer_pin, HIGH);
+      ledcWriteTone(buzzer_pwmChannel, 2794);
       // rgb(1, 0, 0);
       delay(500);
     }
     else
     {
       worker_danger = false;
-      digitalWrite(buzzer_pin, LOW);
+      ledcWriteTone(buzzer_pwmChannel, 0);
     } // add distance, and more
 
     vTaskDelay(100 / portTICK_PERIOD_MS);
@@ -364,7 +367,8 @@ void setup()
   pinMode(uw_trig_pin, OUTPUT);
   pinMode(uw_echo_pin, INPUT);
 
-  pinMode(buzzer_pin, OUTPUT);
+  ledcSetup(buzzer_pwmChannel, buzzer_pwnFreq, buzzer_pwmResoultion);
+  ledcAttachPin(buzzer_pin, buzzer_pwmChannel);
 
   // setup OLED Display
   display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
