@@ -1,3 +1,5 @@
+// Rename file to config.h
+
 #define WIFI_SSID ""
 #define WIFI_PASSWD ""
 #define MQTT_PORT 1883

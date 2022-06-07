@@ -12,23 +12,10 @@
 
 #include <DHT.h>
 
+// network config
 #include <config.h>
 
-#if CONFIG_FREERTOS_UNICORE
-#define ARDUINO_RUNNING_CORE 0
-#else
-#define ARDUINO_RUNNING_CORE 1
-#endif
-
 const char *helmet_id = "1";
-
-// Setting Network
-const char *wifi_ssid = WIFI_SSID;
-const char *wifi_passwd = WIFI_PASSWD;
-const char *mqtt_server = MQTT_HOST;
-const int mqtt_port = MQTT_PORT;
-const char *mqtt_user = MQTT_USER;
-const char *mqtt_passwd = MQTT_PASSWD;
 
 WiFiClient ESPClient;
 PubSubClient client(ESPClient);
@@ -46,8 +33,8 @@ static const uint32_t GPSBaud = 9600;
 TinyGPSPlus gps;
 SoftwareSerial ss(GPSRX, GPSTX);
 float latitude, longitude;
-// float latitude = 37.58510543, longitude = 126.92524348;
 
+// buzzer pwm settings
 int buzzer_pin = 4;
 int buzzer_pwmChannel = 0;
 int buzzer_pwnFreq = 5000;
@@ -67,10 +54,10 @@ int uw_echo_pin = 12;
 long duration, distance;
 
 // Setting LED
-int led_red = 32;
-int led_green = 33;
-int led_blue = 25;
 int led_front = 19;
+int led_pwmChannel = 1;
+int led_pwmFreq = 5000;
+int led_pwmResolution = 8;
 
 bool worker_danger = false;
 
@@ -109,7 +96,7 @@ void display_showText(String msg, uint16_t color)
 {
   display.clearDisplay();
   display.setTextColor(color);
-  display.setCursor(0, 16);
+  display.setCursor(0, 0);
   display.println(msg);
   display.display();
 }
@@ -133,7 +120,7 @@ void network_conn(void *parameter)
     // Connect to WiFi when not connected
     while (!client.connected() || WiFi.status() != WL_CONNECTED)
     {
-      WiFi.begin(wifi_ssid, wifi_passwd);
+      WiFi.begin(WIFI_SSID, WIFI_PASSWD);
       Serial.print("Connecting to WiFi");
 
       display_showText("Connecting to WiFi..", WHITE);
@@ -146,7 +133,7 @@ void network_conn(void *parameter)
       Serial.println("\nConnected to WiFi");
 
       // Connect to MQTT when not connected
-      client.setServer(mqtt_server, mqtt_port);
+      client.setServer(MQTT_HOST, MQTT_PORT);
       Serial.print("Connecting to MQTT");
       while (!client.connected())
       {
@@ -154,7 +141,7 @@ void network_conn(void *parameter)
 
         display_showText("Connecting to Server..", WHITE);
 
-        if (client.connect("ESP32Client", mqtt_user, mqtt_passwd))
+        if (client.connect("ESP32Client", MQTT_USER, MQTT_PASSWD))
         {
           Serial.println("\nConnected to MQTT");
 
@@ -195,24 +182,6 @@ void dataToJson_publish(void *parameter)
     doc["photoresistor"] = photo_val;
     doc["distance"] = distance;
     doc["shock"] = shock_val;
-
-    /*
-    JsonObject sensor = doc.createNestedObject("sensor");
-
-    JsonObject sensor_gps = sensor.createNestedObject("gps"); // "sensor" : {"gps" : [latitude, longitude]}
-    sensor_gps["latitude"] = latitude;
-    sensor_gps["longitude"] = longitude;
-
-    JsonObject sensor_dht = sensor.createNestedObject("dht"); // "sensor":  {"dht" : [humid, temp] }
-    sensor_dht["humid"] = humid;
-    sensor_dht["temp"] = temp;
-
-    sensor["photoresistor"] = photo_val;
-    sensor["distance"] = distance;
-
-    sensor["shock"] = shock_val;
-    */
-
     doc["worker_danger"] = worker_danger;
 
     serializeJson(doc, json_data);
@@ -250,59 +219,21 @@ void gpsState(void *parameter)
     latitude = getGPSFloat(gps.location.lat(), gps.location.isValid());
     longitude = getGPSFloat(gps.location.lng(), gps.location.isValid());
 
-    while (client.connected())
-    {
-      display.clearDisplay();
-      display.setTextColor(WHITE);
-      display.setCursor(0, 16);
-      display.print("lat : ");
-      display.println(latitude);
-      display.print("lng : ");
-      display.println(longitude);
-      display.display();
-    }
-
     gpsDelay(1000);
 
     vTaskDelay(500 / portTICK_PERIOD_MS);
   }
 }
 
-// Read lightness from photoresistor
-void photoresistor(void *parameter)
+// ultrasonic, photoresistor, shock
+void getSensorState(void *parameter)
 {
   while (1)
   {
-    photo_val = analogRead(photoresistor_pin);
+    // photo_val = analogRead(photoresistor_pin);
 
-    vTaskDelay(600 / portTICK_PERIOD_MS);
-  }
-}
+    shock_val = digitalRead(shock_pin);
 
-// Read shock from SW-240
-void shock(void *parameter)
-{
-  while (1)
-  {
-    int count = 0;
-    if (digitalRead(shock_pin) == HIGH)
-    {
-      shock_val = true;
-    }
-    else
-    {
-      shock_val = false;
-    }
-
-    vTaskDelay(800 / portTICK_PERIOD_MS);
-  }
-}
-
-// Read distance from HC-SR04
-void uw_distance(void *parameter)
-{
-  while (1)
-  {
     digitalWrite(uw_trig_pin, LOW);
     delayMicroseconds(2);
     digitalWrite(uw_trig_pin, HIGH);
@@ -312,16 +243,51 @@ void uw_distance(void *parameter)
     duration = pulseIn(uw_echo_pin, HIGH);
     distance = duration / 29.1 / 2;
 
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    vTaskDelay(500 / portTICK_PERIOD_MS);
   }
 }
 
-// RGB led
-void rgb(bool red, bool green, bool blue)
+void photoresistor(void *parameter)
 {
-  digitalWrite(led_red, red);
-  digitalWrite(led_green, green);
-  digitalWrite(led_blue, blue);
+  while (1)
+  {
+    photo_val = analogRead(photoresistor_pin);
+
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+  }
+}
+
+// blinks on specified case
+void ledOnSituation(void *parameter)
+{
+  while (1)
+  {
+    // when not connected
+    if (!client.connected() || WiFi.status() != WL_CONNECTED)
+    {
+      ledcWrite(led_pwmChannel, 255);
+      delay(300);
+      ledcWrite(led_pwmChannel, 0);
+      delay(300);
+    }
+
+    // helmet on shock
+    else if (shock_val)
+    {
+      ledcWrite(led_pwmChannel, 255);
+      delay(100);
+      ledcWrite(led_pwmChannel, 0);
+      delay(100);
+    }
+
+    else
+    {
+      int lightness = (4095 - photo_val) / 16;
+      ledcWrite(led_pwmChannel, lightness);
+    }
+  }
+
+  vTaskDelay(180 / portTICK_PERIOD_MS);
 }
 
 // Change bool worker_danger to true when shock detected
@@ -349,18 +315,12 @@ void workerSituation(void *parameter)
   }
 }
 
-int i = 0;
-
 void setup()
 {
   Serial.begin(115200);
   ss.begin(GPSBaud);
 
   dht.begin();
-
-  pinMode(led_red, OUTPUT);
-  pinMode(led_green, OUTPUT);
-  pinMode(led_blue, OUTPUT);
 
   pinMode(shock_pin, INPUT);
 
@@ -370,19 +330,22 @@ void setup()
   ledcSetup(buzzer_pwmChannel, buzzer_pwnFreq, buzzer_pwmResoultion);
   ledcAttachPin(buzzer_pin, buzzer_pwmChannel);
 
+  ledcSetup(led_pwmChannel, led_pwmFreq, led_pwmResolution);
+  ledcAttachPin(led_front, led_pwmChannel);
+
   // setup OLED Display
   display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
+  display.setRotation(2); // turn upside down
   display.clearDisplay();
   display.display();
 
   xTaskCreate(network_conn, "network_conn", 4000, NULL, 10, NULL);
-  xTaskCreate(photoresistor, "photoresistor", 4000, NULL, 10, NULL);
   xTaskCreate(dhtState, "dhtState", 4000, NULL, 10, NULL);
-  xTaskCreate(shock, "shock", 4000, NULL, 10, NULL);
-  xTaskCreate(uw_distance, "uw_distance", 4000, NULL, 10, NULL);
   xTaskCreate(dataToJson_publish, "dataToJson_Publish", 4000, NULL, 10, NULL);
   xTaskCreate(gpsState, "gpsState", 4000, NULL, 10, NULL);
   xTaskCreate(workerSituation, "workerSituation", 4000, NULL, 10, NULL);
+  xTaskCreate(photoresistor, "photoresistor", 4000, NULL, 10, NULL);
+  // xTaskCreate(ledOnSituation, "ledOnSituation", 4000, NULL, 10, NULL);
 }
 
 void loop()
