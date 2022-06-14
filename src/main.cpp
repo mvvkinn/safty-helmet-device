@@ -7,18 +7,13 @@
 #include <SoftwareSerial.h>
 #include <TinyGPSPlus.h>
 
+#include <Adafruit_MPU6050.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_GFX.h>
 
 #include <DHT.h>
 
 #include <config.h>
-
-#if CONFIG_FREERTOS_UNICORE
-#define ARDUINO_RUNNING_CORE 0
-#else
-#define ARDUINO_RUNNING_CORE 1
-#endif
 
 const char *helmet_id = "1";
 
@@ -48,10 +43,16 @@ SoftwareSerial ss(GPSRX, GPSTX);
 float latitude, longitude;
 // float latitude = 37.58510543, longitude = 126.92524348;
 
+int pwmFreq = 5000;
+int pwmResoultion = 8;
+
 int buzzer_pin = 4;
 int buzzer_pwmChannel = 0;
-int buzzer_pwnFreq = 5000;
-int buzzer_pwmResoultion = 8;
+
+// Setting LED
+int led_front = 19;
+int led_pwmChannel = 1;
+int led_lightness = 0;
 
 // Setting photoresistor lightness detection
 int photoresistor_pin = 34;
@@ -66,17 +67,11 @@ int uw_trig_pin = 14;
 int uw_echo_pin = 12;
 long duration, distance;
 
-// Setting LED
-int led_red = 32;
-int led_green = 33;
-int led_blue = 25;
-int led_front = 19;
-
 bool worker_danger = false;
 
 // Setting OLED Display
 #define OLED_ADDR 0x3c
-Adafruit_SSD1306 display(-1); // -1 = no reset pin
+Adafruit_SSD1306 display = Adafruit_SSD1306(128, 64, &Wire);
 
 // FreeRTOS multitask variable
 // SemaphoreHandle_t xMutex;
@@ -117,8 +112,6 @@ void display_showText(String msg, uint16_t color)
 // Callback from MQTT Message
 void message_callback(String topic, String message)
 {
-  Serial.println("스마트안전모 > " + topic + " : " + message);
-
   if (topic == "helmet" && message == "Online")
   {
     display_showText(message, WHITE);
@@ -160,7 +153,7 @@ void network_conn(void *parameter)
 
           display_showText("Connected", WHITE);
 
-          mqtt.subscribe("helmet", message_callback);
+          // mqtt.subscribe("helmet", message_callback);
         }
         else
         {
@@ -183,41 +176,28 @@ void dataToJson_publish(void *parameter)
 {
   while (1)
   {
-    String json_data;
+    if ((WiFi.status() == WL_CONNECTED && client.connected()))
+    {
+      String json_data;
 
-    StaticJsonDocument<256> doc;
+      StaticJsonDocument<256> doc;
 
-    doc["helmet_id"] = helmet_id;
-    doc["latitude"] = latitude;
-    doc["longitude"] = longitude;
-    doc["humid"] = humid;
-    doc["temp"] = temp;
-    doc["photoresistor"] = photo_val;
-    doc["distance"] = distance;
-    doc["shock"] = shock_val;
+      doc["helmet_id"] = helmet_id;
+      doc["latitude"] = latitude;
+      doc["longitude"] = longitude;
+      doc["humid"] = humid;
+      doc["temp"] = temp;
+      doc["photoresistor"] = photo_val;
+      doc["distance"] = distance;
+      doc["shock"] = shock_val;
 
-    /*
-    JsonObject sensor = doc.createNestedObject("sensor");
+      doc["worker_danger"] = worker_danger;
 
-    JsonObject sensor_gps = sensor.createNestedObject("gps"); // "sensor" : {"gps" : [latitude, longitude]}
-    sensor_gps["latitude"] = latitude;
-    sensor_gps["longitude"] = longitude;
+      serializeJson(doc, json_data);
 
-    JsonObject sensor_dht = sensor.createNestedObject("dht"); // "sensor":  {"dht" : [humid, temp] }
-    sensor_dht["humid"] = humid;
-    sensor_dht["temp"] = temp;
-
-    sensor["photoresistor"] = photo_val;
-    sensor["distance"] = distance;
-
-    sensor["shock"] = shock_val;
-    */
-
-    doc["worker_danger"] = worker_danger;
-
-    serializeJson(doc, json_data);
-
-    mqtt.publish("helmet", json_data);
+      mqtt.publish("helmet", json_data);
+      Serial.println("JSON Sent");
+    }
 
     vTaskDelay(1000 / portTICK_PERIOD_MS);
   }
@@ -250,18 +230,6 @@ void gpsState(void *parameter)
     latitude = getGPSFloat(gps.location.lat(), gps.location.isValid());
     longitude = getGPSFloat(gps.location.lng(), gps.location.isValid());
 
-    while (client.connected())
-    {
-      display.clearDisplay();
-      display.setTextColor(WHITE);
-      display.setCursor(0, 16);
-      display.print("lat : ");
-      display.println(latitude);
-      display.print("lng : ");
-      display.println(longitude);
-      display.display();
-    }
-
     gpsDelay(1000);
 
     vTaskDelay(500 / portTICK_PERIOD_MS);
@@ -273,9 +241,12 @@ void photoresistor(void *parameter)
 {
   while (1)
   {
-    photo_val = analogRead(photoresistor_pin);
+    if ((WiFi.status() == WL_CONNECTED && client.connected()))
+    {
+      photo_val = analogRead(photoresistor_pin);
+    }
 
-    vTaskDelay(600 / portTICK_PERIOD_MS);
+    vTaskDelay(100 / portTICK_PERIOD_MS);
   }
 }
 
@@ -303,25 +274,20 @@ void uw_distance(void *parameter)
 {
   while (1)
   {
-    digitalWrite(uw_trig_pin, LOW);
-    delayMicroseconds(2);
-    digitalWrite(uw_trig_pin, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(uw_trig_pin, LOW);
+    if (WiFi.status() == WL_CONNECTED && client.connected())
+    {
+      digitalWrite(uw_trig_pin, LOW);
+      delayMicroseconds(2);
+      digitalWrite(uw_trig_pin, HIGH);
+      delayMicroseconds(10);
+      digitalWrite(uw_trig_pin, LOW);
 
-    duration = pulseIn(uw_echo_pin, HIGH);
-    distance = duration / 29.1 / 2;
+      duration = pulseIn(uw_echo_pin, HIGH);
+      distance = duration / 29.1 / 2;
+    }
 
     vTaskDelay(100 / portTICK_PERIOD_MS);
   }
-}
-
-// RGB led
-void rgb(bool red, bool green, bool blue)
-{
-  digitalWrite(led_red, red);
-  digitalWrite(led_green, green);
-  digitalWrite(led_blue, blue);
 }
 
 // Change bool worker_danger to true when shock detected
@@ -335,7 +301,7 @@ void workerSituation(void *parameter)
     {
       // this informs admin worker is in danger
       worker_danger = true;
-      ledcWriteTone(buzzer_pwmChannel, 2794);
+      //ledcWriteTone(buzzer_pwmChannel, 2794);
       // rgb(1, 0, 0);
       delay(500);
     }
@@ -349,6 +315,44 @@ void workerSituation(void *parameter)
   }
 }
 
+void ledBlink()
+{
+  switch (led_lightness)
+  {
+  case 0:
+    led_lightness = 255;
+    break;
+  case 255:
+    led_lightness = 0;
+    break;
+  default:
+    led_lightness = 0;
+    break;
+  }
+}
+
+void ledOnStatus(void *parameter)
+{
+  while (1)
+  {
+    if (WiFi.status() != WL_CONNECTED && !client.connected())
+    {
+      ledBlink();
+    }
+    else if (shock_val)
+    {
+      ledBlink();
+    }
+    else
+    {
+      led_lightness = (4095 - photo_val) / 16; // 2^(12-4) = 2^8 = 256
+    }
+
+    ledcWrite(led_pwmChannel, led_lightness);
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+  }
+}
+
 int i = 0;
 
 void setup()
@@ -358,25 +362,28 @@ void setup()
 
   dht.begin();
 
-  pinMode(led_red, OUTPUT);
-  pinMode(led_green, OUTPUT);
-  pinMode(led_blue, OUTPUT);
-
   pinMode(shock_pin, INPUT);
 
   pinMode(uw_trig_pin, OUTPUT);
   pinMode(uw_echo_pin, INPUT);
 
-  ledcSetup(buzzer_pwmChannel, buzzer_pwnFreq, buzzer_pwmResoultion);
+  ledcSetup(buzzer_pwmChannel, pwmFreq, pwmResoultion);
   ledcAttachPin(buzzer_pin, buzzer_pwmChannel);
+
+  ledcSetup(led_pwmChannel, pwmFreq, pwmResoultion);
+  ledcAttachPin(led_front, led_pwmChannel);
 
   // setup OLED Display
   display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
+  display.setRotation(2);
+  display.setTextSize(1);
   display.clearDisplay();
   display.display();
+  
 
   xTaskCreate(network_conn, "network_conn", 4000, NULL, 10, NULL);
   xTaskCreate(photoresistor, "photoresistor", 4000, NULL, 10, NULL);
+  xTaskCreate(ledOnStatus, "ledOnStatus", 4000, NULL, 10, NULL);
   xTaskCreate(dhtState, "dhtState", 4000, NULL, 10, NULL);
   xTaskCreate(shock, "shock", 4000, NULL, 10, NULL);
   xTaskCreate(uw_distance, "uw_distance", 4000, NULL, 10, NULL);
