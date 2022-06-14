@@ -71,7 +71,7 @@ bool worker_danger = false;
 
 // Setting OLED Display
 #define OLED_ADDR 0x3c
-Adafruit_SSD1306 display = Adafruit_SSD1306(128, 64, &Wire);
+Adafruit_SSD1306 display = Adafruit_SSD1306(128, 64, &Wire); // -1 = no reset pin
 
 // FreeRTOS multitask variable
 // SemaphoreHandle_t xMutex;
@@ -301,8 +301,8 @@ void workerSituation(void *parameter)
     {
       // this informs admin worker is in danger
       worker_danger = true;
-      //ledcWriteTone(buzzer_pwmChannel, 2794);
-      // rgb(1, 0, 0);
+      // ledcWriteTone(buzzer_pwmChannel, 2794);
+      //  rgb(1, 0, 0);
       delay(500);
     }
     else
@@ -379,7 +379,6 @@ void setup()
   display.setTextSize(1);
   display.clearDisplay();
   display.display();
-  
 
   xTaskCreate(network_conn, "network_conn", 4000, NULL, 10, NULL);
   xTaskCreate(photoresistor, "photoresistor", 4000, NULL, 10, NULL);
