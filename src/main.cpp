@@ -62,12 +62,18 @@ int photo_val = 0;
 int shock_pin = 18;
 bool shock_val = false;
 
+// touch(button)
+int touch_btn = T7;
+
 // Setting HC-SR04 distance
 int uw_trig_pin = 14;
 int uw_echo_pin = 12;
 long duration, distance;
 
 bool worker_danger = false;
+
+// Gyro & Accelero setting
+Adafruit_MPU6050 mpu;
 
 // Setting OLED Display
 #define OLED_ADDR 0x3c
@@ -104,7 +110,7 @@ void display_showText(String msg, uint16_t color)
 {
   display.clearDisplay();
   display.setTextColor(color);
-  display.setCursor(0, 16);
+  display.setCursor(0, 0);
   display.println(msg);
   display.display();
 }
@@ -179,6 +185,7 @@ void dataToJson_publish(void *parameter)
     if ((WiFi.status() == WL_CONNECTED && client.connected()))
     {
       String json_data;
+      String display_data;
 
       StaticJsonDocument<256> doc;
 
@@ -255,17 +262,9 @@ void shock(void *parameter)
 {
   while (1)
   {
-    int count = 0;
-    if (digitalRead(shock_pin) == HIGH)
-    {
-      shock_val = true;
-    }
-    else
-    {
-      shock_val = false;
-    }
+    shock_val = digitalRead(shock_pin);
 
-    vTaskDelay(800 / portTICK_PERIOD_MS);
+    vTaskDelay(200 / portTICK_PERIOD_MS);
   }
 }
 
@@ -297,22 +296,59 @@ void workerSituation(void *parameter)
   {
     // change to worker_danger = shock && gyro_shock
     // gyro_shock == if there is no changes after shock
-    if (shock_val == true)
+    if (shock_val)
     {
+      Serial.println("shock detected");
       // this informs admin worker is in danger
-      worker_danger = true;
-      // ledcWriteTone(buzzer_pwmChannel, 2794);
-      //  rgb(1, 0, 0);
-      delay(500);
+      vTaskDelay(5000 / portTICK_PERIOD_MS);
+      Serial.println("detecting new motion");
+
+      bool onMove = mpu.getMotionInterruptStatus();
+
+      Serial.println(onMove);
+
+      if (!onMove)
+      {
+        worker_danger = true;
+        Serial.println("motion not detected, worker on danger");
+      }
     }
-    else
-    {
-      worker_danger = false;
-      ledcWriteTone(buzzer_pwmChannel, 0);
-    } // add distance, and more
 
     vTaskDelay(100 / portTICK_PERIOD_MS);
   }
+}
+
+void getAccGyro(void *parameter)
+{
+  while (1)
+  {
+    if (mpu.getMotionInterruptStatus())
+    {
+      sensors_event_t a, g, temp;
+      mpu.getEvent(&a, &g, &temp);
+
+      /* Print out the values */
+      Serial.print("AccelX:");
+      Serial.print(a.acceleration.x);
+      Serial.print(",");
+      Serial.print("AccelY:");
+      Serial.print(a.acceleration.y);
+      Serial.print(",");
+      Serial.print("AccelZ:");
+      Serial.print(a.acceleration.z);
+      Serial.print(", ");
+      Serial.print("GyroX:");
+      Serial.print(g.gyro.x);
+      Serial.print(",");
+      Serial.print("GyroY:");
+      Serial.print(g.gyro.y);
+      Serial.print(",");
+      Serial.print("GyroZ:");
+      Serial.print(g.gyro.z);
+      Serial.println("");
+    }
+  }
+  vTaskDelay(10 / portTICK_PERIOD_MS);
 }
 
 void ledBlink()
@@ -331,21 +367,48 @@ void ledBlink()
   }
 }
 
-void ledOnStatus(void *parameter)
+void buzzerOn(bool isHigh)
+{
+  if (isHigh)
+  {
+    ledcWriteTone(buzzer_pwmChannel, 2794);
+  }
+  else
+  {
+    ledcWriteTone(buzzer_pwmChannel, 0);
+  }
+}
+
+void alertOnStatus(void *parameter)
 {
   while (1)
   {
+    // not connected to network
     if (WiFi.status() != WL_CONNECTED && !client.connected())
     {
       ledBlink();
     }
-    else if (shock_val)
+
+    // shock detected or no movement detected after shock
+    else if (shock_val || worker_danger)
     {
       ledBlink();
+      buzzerOn(true);
+      display_showText("!!!SHOCK DETECTED!!!", WHITE);
+
+      if (touchRead(touch_btn) > 30 && worker_danger)
+      {
+        Serial.println("btn pressed, set to normal");
+        worker_danger = false;
+      }
     }
+
+    // normal status
     else
     {
       led_lightness = (4095 - photo_val) / 16; // 2^(12-4) = 2^8 = 256
+      buzzerOn(false);
+      display_showText("Status: Normal", WHITE);
     }
 
     ledcWrite(led_pwmChannel, led_lightness);
@@ -362,6 +425,15 @@ void setup()
 
   dht.begin();
 
+  mpu.begin();
+
+  // setup OLED Display
+  display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
+  display.setRotation(2);
+  display.setTextSize(1);
+  display.clearDisplay();
+  display.display();
+
   pinMode(shock_pin, INPUT);
 
   pinMode(uw_trig_pin, OUTPUT);
@@ -373,22 +445,23 @@ void setup()
   ledcSetup(led_pwmChannel, pwmFreq, pwmResoultion);
   ledcAttachPin(led_front, led_pwmChannel);
 
-  // setup OLED Display
-  display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
-  display.setRotation(2);
-  display.setTextSize(1);
-  display.clearDisplay();
-  display.display();
+  mpu.setHighPassFilter(MPU6050_HIGHPASS_0_63_HZ);
+  mpu.setMotionDetectionThreshold(30);
+  mpu.setMotionDetectionDuration(20);
+  mpu.setInterruptPinLatch(true);
+  mpu.setInterruptPinPolarity(true);
+  mpu.setMotionInterrupt(true);
 
   xTaskCreate(network_conn, "network_conn", 4000, NULL, 10, NULL);
   xTaskCreate(photoresistor, "photoresistor", 4000, NULL, 10, NULL);
-  xTaskCreate(ledOnStatus, "ledOnStatus", 4000, NULL, 10, NULL);
+  xTaskCreate(alertOnStatus, "alertOnStatus", 4000, NULL, 10, NULL);
   xTaskCreate(dhtState, "dhtState", 4000, NULL, 10, NULL);
   xTaskCreate(shock, "shock", 4000, NULL, 10, NULL);
-  xTaskCreate(uw_distance, "uw_distance", 4000, NULL, 10, NULL);
+  // xTaskCreate(uw_distance, "uw_distance", 4000, NULL, 10, NULL);
   xTaskCreate(dataToJson_publish, "dataToJson_Publish", 4000, NULL, 10, NULL);
   xTaskCreate(gpsState, "gpsState", 4000, NULL, 10, NULL);
   xTaskCreate(workerSituation, "workerSituation", 4000, NULL, 10, NULL);
+  // xTaskCreate(getAccGyro, "getAccGyro", 4000, NULL, 10, NULL);
 }
 
 void loop()
