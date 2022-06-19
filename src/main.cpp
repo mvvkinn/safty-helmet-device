@@ -396,7 +396,7 @@ void alertOnStatus(void *parameter)
       buzzerOn(true);
       display_showText("!!!SHOCK DETECTED!!!", WHITE);
 
-      if (touchRead(touch_btn) > 30 && worker_danger)
+      if (touchRead(touch_btn) < 70 && worker_danger)
       {
         Serial.println("btn pressed, set to normal");
         worker_danger = false;
